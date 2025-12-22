@@ -1,4 +1,5 @@
-﻿using Helpers;
+﻿//NEW
+using Helpers;
 using PartyAIControls.HarmonyPatches;
 using PartyAIControls.Models;
 using System;
@@ -856,6 +857,127 @@ namespace PartyAIControls.CampaignBehaviors
             }
         }
 
+        private void ImplementPatrolClanLands(Hero hero, MobileParty party, IMapPoint target, in PartyThinkParams thinkParams, out List<(AIBehaviorData, float)> newParams, float distanceFactor = 1.0f, bool useQuickDistance = false)
+        {
+            newParams = new List<(AIBehaviorData, float)>();
+            float range = Campaign.Current.GetAverageDistanceBetweenClosestTwoTownsWithNavigationType(party.DesiredAiNavigationType) * 0.9f * distanceFactor;
+
+            if (hero?.Clan?.Settlements?.Count == 0)
+            {
+                newParams = thinkParams.AIBehaviorScores.ConvertAll(s => (s.Item1, s.Item2));
+                return;
+            }
+
+            // === PRIORITY: Low on food -> go get food ===
+            int daysOfFood = party.GetNumDaysForFoodToLast();
+            if (daysOfFood <= 8)
+            {
+                Settlement town = FindNearestReachableSettlement(
+                    party,
+                    s => (s.IsTown || s.IsVillage) &&
+                         (s.MapFaction == party.MapFaction ||
+                          FactionManager.IsNeutralWithFaction(party.MapFaction, s.MapFaction)),
+                    party.DesiredAiNavigationType
+                );
+
+                if (town != null)
+                {
+                    newParams.Add((
+                        new AIBehaviorData(town, AiBehavior.GoToSettlement, party.DesiredAiNavigationType, false, false, false),
+                        10f
+                    ));
+                }
+                return;
+            }
+
+            if (hero?.Clan == null)
+                return;
+
+            // Find nearest clan settlement to patrol around
+            Settlement nearestClan = FindNearestSettlement(s => s.OwnerClan == hero.Clan, party);
+            if (nearestClan == null)
+                return;
+
+            // 5% chance to switch to a random clan settlement (variety in patrol)
+            if (MBRandom.RandomFloat < 0.05f && hero.Clan.Settlements.Count > 0)
+            {
+                nearestClan = hero.Clan.Settlements.GetRandomElementInefficiently();
+            }
+
+            Vec2 clanPos = nearestClan.GetPosition2D;
+
+            // === PRIORITY: React to clan settlements in danger ===
+            foreach (Settlement clanSettlement in hero.Clan.Settlements)
+            {
+                float distToClanSettlement = party.GetPosition2D.Distance(clanSettlement.GetPosition2D);
+
+                if (distToClanSettlement > range * 8)
+                    continue;
+
+                if (clanSettlement.IsFortification && clanSettlement.IsUnderSiege)
+                {
+                    newParams.Add((
+                        new AIBehaviorData(clanSettlement, AiBehavior.DefendSettlement, party.DesiredAiNavigationType, false, false, false),
+                        8f
+                    ));
+
+                    if (party.Objective != PartyObjective.Defensive)
+                    {
+                        party.SetPartyObjective(PartyObjective.Defensive);
+                    }
+                    return;
+                }
+
+                if (clanSettlement.IsVillage && clanSettlement.Village?.VillageState == Village.VillageStates.BeingRaided)
+                {
+                    newParams.Add((
+                        new AIBehaviorData(clanSettlement, AiBehavior.DefendSettlement, party.DesiredAiNavigationType, false, false, false),
+                        8f
+                    ));
+
+                    if (party.Objective != PartyObjective.Defensive)
+                    {
+                        party.SetPartyObjective(PartyObjective.Defensive);
+                    }
+                    return;
+                }
+            }
+
+            // === If too far from clan lands, issue command to walk there ===
+            // KEY FIX: DON'T return early - still need to filter behaviors below!
+            if (party.GetPosition2D.Distance(clanPos) > range * 4)
+            {
+                newParams.Add((
+                    new AIBehaviorData(nearestClan, AiBehavior.GoToSettlement, party.DesiredAiNavigationType, false, false, false),
+                    5f
+                ));
+
+                // Note: Intentionally NOT setting PartyObjective here to let filtering below also contribute
+            }
+
+            // === ALWAYS filter vanilla AI behaviors by distance ===
+            // This is carbon198's fix: filter happens regardless of distance to clan lands
+            foreach ((AIBehaviorData behavior, float weight) in thinkParams.AIBehaviorScores)
+            {
+                if (behavior.Party == null)
+                    continue;
+
+                // Use behavior.Position to get target location
+                Vec2 behaviorPos = behavior.Position.ToVec2();
+
+                // FILTER: Only include targets within patrol range of nearest clan settlement
+                if (behaviorPos.Distance(clanPos) < range)
+                {
+                    newParams.Add((behavior, weight));
+                }
+            }
+
+            if (party.Objective != PartyObjective.Aggressive)
+            {
+                party.SetPartyObjective(PartyObjective.Aggressive);
+            }
+        }
+
         private void ImplementPatrolAroundSettlement(PartyAIClanPartySettings settings, MobileParty party, IMapPoint target, in PartyThinkParams thinkParams, out List<(AIBehaviorData, float)> newParams, float distanceFactor = 1.0f)
         {
             newParams = new List<(AIBehaviorData, float)>();
@@ -866,131 +988,102 @@ namespace PartyAIControls.CampaignBehaviors
             float range = Campaign.Current.GetAverageDistanceBetweenClosestTwoTownsWithNavigationType(MobileParty.NavigationType.Default) * 0.9f * distanceFactor;
             
             Vec2 centerPos = centerSettlement.GatePosition.ToVec2();
-            float rangeSq = range * range;
-            
-            // Check if party is far from the patrol center (still traveling TO it)
-            float distanceToCenter = party.GetPosition2D.DistanceSquared(centerPos);
-            bool isTravelingToSettlement = distanceToCenter > rangeSq;
-            
-            // Allow sea/land travel when far away, force land-only when at patrol area
-            var navType = isTravelingToSettlement 
-                ? (party.HasNavalNavigationCapability ? MobileParty.NavigationType.All : MobileParty.NavigationType.Default)
-                : MobileParty.NavigationType.Default;
-            
-            party.DesiredAiNavigationType = navType;
 
-            // === PRIORITY: Low on food or NO food -> go to nearest friendly/neutral town ===
+            // === PRIORITY: Low on food -> go get food ===
             int daysOfFood = party.GetNumDaysForFoodToLast();
             if (daysOfFood <= 8)
             {
-                Settlement town = FindNearestSettlement(
+                Settlement town = FindNearestReachableSettlement(
+                    party,
                     s => (s.IsTown || s.IsVillage) &&
                          (s.MapFaction == party.MapFaction ||
                           FactionManager.IsNeutralWithFaction(party.MapFaction, s.MapFaction)) &&
                          s != target,
-                    party
+                    party.DesiredAiNavigationType
                 );
+                
                 if (town != null)
                 {
                     newParams.Add((
                         new AIBehaviorData(
                             town,
                             AiBehavior.GoToSettlement,
-                            navType,
+                            party.DesiredAiNavigationType,
                             false,
                             false,
                             false
                         ),
-                        10f
+                        2f
                     ));
-
-                    if (party.Objective != PartyObjective.Defensive)
-                    {
-                        party.SetPartyObjective(PartyObjective.Defensive);
-                    }
-                    return;
                 }
+                return;
             }
 
             // === PRIORITY: Defend nearby same-faction settlements under attack ===
             foreach (Settlement s in Settlement.All)
             {
+                // Check if settlement is within range and same faction
                 if (s.MapFaction != party.MapFaction)
                     continue;
 
-                if (s.GetPosition2D.DistanceSquared(centerPos) > rangeSq)
+                float distToSettlement = s.GatePosition.ToVec2().Distance(centerPos);
+                if (distToSettlement > range)
                     continue;
 
                 if (s.IsFortification && s.IsUnderSiege)
                 {
-                    newParams.Add((
-                        new AIBehaviorData(
-                            s,
-                            AiBehavior.DefendSettlement,
-                            navType,
-                            false,
-                            false,
-                            false
-                        ),
-                        8f
-                    ));
-
-                    if (party.Objective != PartyObjective.Defensive)
-                    {
-                        party.SetPartyObjective(PartyObjective.Defensive);
-                    }
+                    SetPartyAiAction.GetActionForDefendingSettlement(
+                        party,
+                        s,
+                        party.DesiredAiNavigationType,
+                        false,
+                        false
+                    );
                     return;
                 }
 
                 if (s.IsVillage && s.Village?.VillageState == Village.VillageStates.BeingRaided)
                 {
-                    newParams.Add((
-                        new AIBehaviorData(
-                            s,
-                            AiBehavior.DefendSettlement,
-                            navType,
-                            false,
-                            false,
-                            false
-                        ),
-                        8f
-                    ));
-
-                    if (party.Objective != PartyObjective.Defensive)
-                    {
-                        party.SetPartyObjective(PartyObjective.Defensive);
-                    }
+                    SetPartyAiAction.GetActionForDefendingSettlement(
+                        party,
+                        s,
+                        party.DesiredAiNavigationType,
+                        false,
+                        false
+                    );
                     return;
                 }
             }
 
-            // === If too far from patrol center, travel to it (allows sea travel) ===
-            if (distanceToCenter > (range * 4) * (range * 4))
+            // === If too far from patrol center, issue command to walk there ===
+            if (party.GetPosition2D.Distance(centerPos) > range * 4)
             {
-                newParams.Add((
-                    new AIBehaviorData(
-                        centerSettlement,
-                        AiBehavior.GoToSettlement,
-                        navType,  // Uses All navigation if far away and has ships
-                        false,
-                        false,
-                        false
-                    ),
-                    5f
-                ));
-
-                if (party.Objective != PartyObjective.Aggressive)
-                {
-                    party.SetPartyObjective(PartyObjective.Aggressive);
-                }
-                return;
+                SetPartyAiAction.GetActionForVisitingSettlement(
+                    party,
+                    centerSettlement,
+                    party.DesiredAiNavigationType,
+                    false,
+                    false
+                );
+                // DON'T return here - we still need to filter behaviors below!
             }
 
-            // === Within patrol range: Use vanilla AI behaviors ===
-            // Let the game's AI choose what to do - copy all vanilla behaviors
+            // === ALWAYS filter vanilla AI behaviors by distance ===
+            // This is the KEY fix: filter happens regardless of distance to patrol center
             foreach ((AIBehaviorData behavior, float weight) in thinkParams.AIBehaviorScores)
             {
-                newParams.Add((behavior, weight));
+                if (behavior.Party == null)
+                    continue;
+                
+                // Fix: Use behavior.Position instead of behavior.Party.GetPosition2D
+                // AIBehaviorData struct has a Position field (CampaignVec2)
+                float distToTarget = behavior.Position.ToVec2().Distance(centerPos);
+                
+                // FILTER: Only include targets within patrol range
+                if (distToTarget < range)
+                {
+                    newParams.Add((behavior, weight));
+                }
             }
 
             if (party.Objective != PartyObjective.Aggressive)
@@ -999,210 +1092,96 @@ namespace PartyAIControls.CampaignBehaviors
             }
         }
 
-private void ImplementPatrolClanLands(Hero hero, MobileParty party, IMapPoint target, in PartyThinkParams thinkParams, out List<(AIBehaviorData, float)> newParams, float distanceFactor = 1.0f, bool useQuickDistance = false)
-{
-    newParams = new List<(AIBehaviorData, float)>();
-    float range = Campaign.Current.GetAverageDistanceBetweenClosestTwoTownsWithNavigationType(party.DesiredAiNavigationType) * 0.9f * distanceFactor;
-
-    if (hero?.Clan?.Settlements?.Count == 0)
+    /// <summary>
+    /// Find the nearest settlement that is actually reachable using the specified navigation type
+    /// </summary>
+    private Settlement FindNearestReachableSettlement(
+        MobileParty party,
+        Func<Settlement, bool> condition,
+        MobileParty.NavigationType navigationType)
     {
-        // No clan settlements - can't patrol, just copy vanilla behaviors
-        newParams = thinkParams.AIBehaviorScores.ConvertAll(s => (s.Item1, s.Item2));
-        return;
-    }
+        Settlement result = null;
+        float bestDistance = float.MaxValue;
 
-    // === PRIORITY: Low food -> get food first ===
-    int daysOfFood = party.GetNumDaysForFoodToLast();
-    if (daysOfFood <= 8)
-    {
-        Settlement town = FindNearestSettlement(
-            s =>
-                (s.IsTown || s.IsVillage) &&
-                (s.MapFaction == party.MapFaction ||
-                 FactionManager.IsNeutralWithFaction(party.MapFaction, s.MapFaction)),
-            party
-        );
-
-        if (town != null)
+        foreach (Settlement settlement in Settlement.All)
         {
-            newParams.Add((
-                new AIBehaviorData(
-                    town,
-                    AiBehavior.GoToSettlement,
-                    party.DesiredAiNavigationType,
-                    false,
-                    false,
-                    false
-                ),
-                10f  // High priority - food
-            ));
-        }
-        return;
-    }
+            if (condition != null && !condition(settlement))
+                continue;
 
-    if (hero?.Clan == null)
-        return;
+            // Use DistanceModel to check if settlement is reachable
+            float distance = Campaign.Current.Models.MapDistanceModel.GetDistance(
+                party,
+                settlement.GatePosition,
+                navigationType,
+                out float _
+            );
 
-    // Nearest clan settlement to patrol around
-    Settlement nearestClan = FindNearestSettlement(
-        x => x.OwnerClan == hero.Clan,
-        party
-    );
-    if (nearestClan == null)
-        return;
+            // Skip unreachable settlements (float.MaxValue means no path exists)
+            if (distance >= float.MaxValue - 1f)
+                continue;
 
-    // Low chance to redirect around another clan settlement
-    if (MBRandom.RandomFloat < 0.05f && hero.Clan.Settlements.Count > 0)
-    {
-        nearestClan = hero.Clan.Settlements.GetRandomElementInefficiently();
-    }
-
-    // === PRIORITY: React to clan settlements in danger ===
-    foreach (Settlement clanSettlement in hero.Clan.Settlements)
-    {
-        if (party.GetPosition2D.Distance(clanSettlement.GetPosition2D) > range * 8)
-            continue;
-
-        if (clanSettlement.IsFortification && clanSettlement.IsUnderSiege)
-        {
-            newParams.Add((
-                new AIBehaviorData(
-                    clanSettlement,
-                    AiBehavior.DefendSettlement,
-                    party.DesiredAiNavigationType,
-                    false,
-                    false,
-                    false
-                ),
-                8f  // High priority
-            ));
-            
-            if (party.Objective != PartyObjective.Defensive)
+            if (distance < bestDistance)
             {
-                party.SetPartyObjective(PartyObjective.Defensive);
+                bestDistance = distance;
+                result = settlement;
             }
-            return;
         }
 
-        if (clanSettlement.IsVillage &&
-            clanSettlement.Village?.VillageState == Village.VillageStates.BeingRaided)
-        {
-            newParams.Add((
-                new AIBehaviorData(
-                    clanSettlement,
-                    AiBehavior.DefendSettlement,
-                    party.DesiredAiNavigationType,
-                    false,
-                    false,
-                    false
-                ),
-                8f  // High priority
-            ));
-            
-            if (party.Objective != PartyObjective.Defensive)
-            {
-                party.SetPartyObjective(PartyObjective.Defensive);
-            }
-            return;
-        }
+        return result;
     }
 
-    // === If too far from clan lands -> travel to nearest clan settlement ===
-    if (party.GetPosition2D.Distance(nearestClan.GetPosition2D) > range * 4)
-    {
-        newParams.Add((
-            new AIBehaviorData(
-                nearestClan,
-                AiBehavior.GoToSettlement,
-                party.DesiredAiNavigationType,
-                false,
-                false,
-                false
-            ),
-            5f  // Medium-high priority
-        ));
-        
-        if (party.Objective != PartyObjective.Defensive)
-        {
-            party.SetPartyObjective(PartyObjective.Defensive);
-        }
-        return;
-    }
-
-    // === Within patrol range: filter vanilla behaviors by distance ===
-    Vec2 clanPos = nearestClan.GetPosition2D;
-    
-    foreach ((AIBehaviorData behavior, float weight) in thinkParams.AIBehaviorScores)
-    {
-        if (behavior.Party == null)
-            continue;
-            
-        Vec2 behaviorPos = behavior.Party.Position.ToVec2();
-        
-        // Only keep behaviors within patrol range
-        if (behaviorPos.Distance(clanPos) < range)
-        {
-            newParams.Add((behavior, weight));
-        }
-    }
-
-    if (party.Objective != PartyObjective.Aggressive)
-    {
-        party.SetPartyObjective(PartyObjective.Aggressive);
-    }
-}
     private void ImplementAllowRaidingVillages(MobileParty party, PartyThinkParams thinkParams, PartyAIClanPartySettings settings)
     {
-      if (settings.AllowRaidVillages)
-      {
-        return;
-      }
-
-      // prevent raiding in army (leave if they raid)
-      // The other half of this is in HarmonyPatches.AiMilitaryBehaviorPatches
-      if (party.Army != null && !party.Army.LeaderParty.LeaderHero.Equals(party.LeaderHero))
-      {
-        if (PAIArmyManagementCalculationModel.IsArmyRaiding(party.Army))
+        if (settings.AllowRaidVillages)
         {
-          // refund influence
-          int influence = Campaign.Current.Models.ArmyManagementCalculationModel.CalculatePartyInfluenceCost(party.Army.LeaderParty, party);
-          ChangeClanInfluenceAction.Apply(party.Army.LeaderParty.LeaderHero.Clan, influence);
-
-          LeaveArmy(party, thinkParams);
+            return;
         }
-      }
+
+        // prevent raiding in army (leave if they raid)
+        // The other half of this is in HarmonyPatches.AiMilitaryBehaviorPatches
+        if (party.Army != null && !party.Army.LeaderParty.LeaderHero.Equals(party.LeaderHero))
+        {
+            if (PAIArmyManagementCalculationModel.IsArmyRaiding(party.Army))
+            {
+                // refund influence
+                int influence = Campaign.Current.Models.ArmyManagementCalculationModel.CalculatePartyInfluenceCost(party.Army.LeaderParty, party);
+                ChangeClanInfluenceAction.Apply(party.Army.LeaderParty.LeaderHero.Clan, influence);
+
+                LeaveArmy(party, thinkParams);
+            }
+        }
     }
 
     private void ImplementAllowJoiningArmies(MobileParty party, PartyThinkParams thinkParams, PartyAIClanPartySettings settings)
     {
-      if (settings.AllowAllowJoinArmies)
-      {
-        return;
-      }
+        if (settings.AllowAllowJoinArmies)
+        {
+            return;
+        }
 
-      // leave army if setting is disabled
-      if (party.Army != null && !party.Army.LeaderParty.LeaderHero.Equals(party.LeaderHero) && !party.Army.LeaderParty.LeaderHero.Equals(Hero.MainHero))
-      {
-        LeaveArmy(party, thinkParams);
-      }
+        // leave army if setting is disabled
+        if (party.Army != null && !party.Army.LeaderParty.LeaderHero.Equals(party.LeaderHero) && !party.Army.LeaderParty.LeaderHero.Equals(Hero.MainHero))
+        {
+            LeaveArmy(party, thinkParams);
+        }
     }
 
     private void ImplementAllowBesieging(MobileParty party, PartyThinkParams thinkParams, PartyAIClanPartySettings settings)
     {
-      if (settings.AllowSieging)
-      {
-        return;
-      }
-
-      // prevent besieging in army (leave if they besiege)
-      // The other half of this is in HarmonyPatches.AiMilitaryBehaviorPatches
-      if (party.Army != null && !party.Army.LeaderParty.LeaderHero.Equals(party.LeaderHero))
-      {
-        if (PAIArmyManagementCalculationModel.IsArmyBesieging(party.Army))
+        if (settings.AllowSieging)
         {
-          LeaveArmy(party, thinkParams);
+            return;
         }
-      }
+
+        // prevent besieging in army (leave if they besiege)
+        // The other half of this is in HarmonyPatches.AiMilitaryBehaviorPatches
+        if (party.Army != null && !party.Army.LeaderParty.LeaderHero.Equals(party.LeaderHero))
+        {
+            if (PAIArmyManagementCalculationModel.IsArmyBesieging(party.Army))
+            {
+                LeaveArmy(party, thinkParams);
+            }
+        }
     }
 
     private void AbandonOrderForNoFood(MobileParty party, PartyAIClanPartySettings settings)
@@ -1213,97 +1192,97 @@ private void ImplementPatrolClanLands(Hero hero, MobileParty party, IMapPoint ta
       ResetPartyAi(party);
     }
 
-        private void LeaveArmy(MobileParty party, PartyThinkParams thinkParams)
-        {
-            // refund influence
-            int influence = Campaign.Current.Models.ArmyManagementCalculationModel
-                .CalculatePartyInfluenceCost(party.Army.LeaderParty, party);
-            ChangeClanInfluenceAction.Apply(party.Army.LeaderParty.LeaderHero.Clan, influence);
+    private void LeaveArmy(MobileParty party, PartyThinkParams thinkParams)
+    {
+      // refund influence
+      int influence = Campaign.Current.Models.ArmyManagementCalculationModel
+          .CalculatePartyInfluenceCost(party.Army.LeaderParty, party);
+      ChangeClanInfluenceAction.Apply(party.Army.LeaderParty.LeaderHero.Clan, influence);
 
-            party.Army = null;
+      party.Army = null;
 
-            // Find nearest friendly/neutral fortification to send the party to
-            Settlement nearestFort = FindNearestSettlement(
-                s =>
-                    s.IsFortification &&
-                    (s.MapFaction == party.MapFaction ||
-                     FactionManager.IsNeutralWithFaction(party.MapFaction, s.MapFaction)),
-                party
-            );
+      // Find nearest friendly/neutral fortification to send the party to
+      Settlement nearestFort = FindNearestSettlement(
+          s =>
+              s.IsFortification &&
+              (s.MapFaction == party.MapFaction ||
+               FactionManager.IsNeutralWithFaction(party.MapFaction, s.MapFaction)),
+          party
+      );
 
-            if (nearestFort != null)
-            {
-                SetPartyAiAction.GetActionForVisitingSettlement(
-                    party,
-                    nearestFort,
-                    party.DesiredAiNavigationType,
-                    false, // isFromPort
-                    false  // isTargetingPort
-                );
-            }
+      if (nearestFort != null)
+      {
+        SetPartyAiAction.GetActionForVisitingSettlement(
+          party,
+          nearestFort,
+          party.DesiredAiNavigationType,
+          false, // isFromPort
+          false  // isTargetingPort
+        );
+      }
 
-            ResetPartyAi(party);
-            thinkParams.Reset(party);
-        }
+      ResetPartyAi(party);
+      thinkParams.Reset(party);
+    }
 
-        private void ResetPartyAi(MobileParty party)
-        {
-            party.Ai.RethinkAtNextHourlyTick = true;
-            party.Ai.SetDoNotMakeNewDecisions(false);
-        }
+    private void ResetPartyAi(MobileParty party)
+    {
+      party.Ai.RethinkAtNextHourlyTick = true;
+      party.Ai.SetDoNotMakeNewDecisions(false);
+    }
 
-        private IEnumerable<WarPartyComponent> ActiveClanParties(Clan c) => c.WarPartyComponents.Where(p => p.MobileParty != MobileParty.MainParty);
+    private IEnumerable<WarPartyComponent> ActiveClanParties(Clan c) => c.WarPartyComponents.Where(p => p.MobileParty != MobileParty.MainParty);
 
     // made my own, native one sucks
-public static Settlement FindNearestSettlement(
-    Func<Settlement, bool> condition,
-    IMapPoint toMapPoint,
-    IEnumerable<Settlement> settlements = null)
-{
-    Settlement result = null;
-    settlements ??= Settlement.All;
-
-    // Get the "origin" position from the map point
-    Vec2 originPos;
-
-    if (toMapPoint is Settlement originSettlement)
+    public static Settlement FindNearestSettlement(
+      Func<Settlement, bool> condition,
+      IMapPoint toMapPoint,
+      IEnumerable<Settlement> settlements = null)
     {
+      Settlement result = null;
+      settlements ??= Settlement.All;
+
+      // Get the "origin" position from the map point
+      Vec2 originPos;
+
+      if (toMapPoint is Settlement originSettlement)
+      {
         originPos = originSettlement.GetPosition2D;
-    }
-    else if (toMapPoint is MobileParty originParty)
-    {
+      }
+      else if (toMapPoint is MobileParty originParty)
+      {
         originPos = originParty.GetPosition2D;
-    }
-    else
-    {
+      }
+      else
+      {
         // Fallback: use main party position if don't recognize the IMapPoint type
         originPos = MobileParty.MainParty.GetPosition2D;
-    }
+      }
 
-    float bestDistSq = float.MaxValue;
+      float bestDistSq = float.MaxValue;
 
-    foreach (Settlement item in settlements)
-    {
+      foreach (Settlement item in settlements)
+      {
         if (condition != null && !condition(item))
-            continue;
+          continue;
 
         // Distance in 2D map space
         float distSq = originPos.DistanceSquared(item.GetPosition2D);
 
         if (distSq < bestDistSq)
         {
-            bestDistSq = distSq;
-            result = item;
+          bestDistSq = distSq;
+          result = item;
         }
-    }
+      }
 
-    return result;
-}
+      return result;
+    }
 
     public override void SyncData(IDataStore dataStore)
     {
-      dataStore.SyncData("_assumingDirectControl", ref _assumingDirectControl);
-      dataStore.SyncData("_recentlyRecruitedFromSettlements", ref _recentlyRecruitedFromSettlements);
+        dataStore.SyncData("_assumingDirectControl", ref _assumingDirectControl);
+        dataStore.SyncData("_recentlyRecruitedFromSettlements", ref _recentlyRecruitedFromSettlements);
     }
   }
 }

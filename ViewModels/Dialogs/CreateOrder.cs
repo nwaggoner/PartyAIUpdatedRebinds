@@ -20,13 +20,13 @@ namespace PartyAIControls.ViewModels.Dialogs
     private static bool _fallback;
 
     private static readonly string _titleText = new TextObject("{=PAIUq8Q1n8k}Choose which type of order to add").ToString();
-    private static readonly string _landpatrolText = new TextObject("{=PAIaOu88dqT}Land Patrol").ToString();
+    private static readonly string _landpatrolText = new TextObject("{=PAIaOu88dqT}Patrol an Area").ToString();
     private static readonly string _visitText = new TextObject("{=PAIIL6JG6Na}Visit A Settlement").ToString();
     private static readonly string _escortText = new TextObject("{=PAI1Et6heEa}Escort A Party").ToString();
     private static readonly string _recruitText = new TextObject("{=PAIyzzBSM4P}Recruit").ToString();
     private static readonly string _recruitHint = new TextObject("{=PAIHJFAtbk8}Order the party leader to only focus on recruiting troops. If they have an assigned troop template, they will only visit settlements that offer those troops. Keep in mind these settlements may be far away.").ToString();
     private static readonly string _stayInSettlementText = new TextObject("{=PAIOzsG1s1J}Stay In A Settlement").ToString();
-    private static readonly string _landpatrolHintText = new TextObject("{=PAIPQxGUfhd}Patrol the land around the target settlement. The party will visit villages and towns to restock its troops and supplies. Bandits and other enemies will be chased down if the party leader believes they can be caught. The party will defend villages and castles/towns within its patrol radius from raids and sieges.").ToString();
+    private static readonly string _landpatrolHintText = new TextObject("{=PAIPQxGUfhd}Patrol around the target settlement. The party will visit villages and towns to restock its troops and supplies. Bandits and other enemies will be chased down if the party leader believes they can be caught. The party will defend villages and castles/towns within its patrol radius from raids and sieges.").ToString();
     private static readonly string _visitHintText = new TextObject("{=PAIljAEpAKF}Visit a settlement but don't stay there.").ToString();
     private static readonly string _escortHintText = new TextObject("{=PAIEI3gTLMP}Escort a party").ToString();
     private static readonly string _stayInSettlementHintText = new TextObject("{=PAIVeQlQhCC}Stay in the settlement. Will not defend the settlement if it is under siege and the party is outside the walls.").ToString();
@@ -44,7 +44,7 @@ namespace PartyAIControls.ViewModels.Dialogs
 
       List<InquiryElement> list = new();
 
-      list.Add(new InquiryElement(new PAICustomOrder(null, OrderType.LandPatrolAroundPoint), _landpatrolText, null, true, _landpatrolHintText));
+      list.Add(new InquiryElement(new PAICustomOrder(null, OrderType.PatrolAroundPoint), _landpatrolText, null, true, _landpatrolHintText));
       list.Add(new InquiryElement(new PAICustomOrder(null, OrderType.EscortParty), _escortText, null, true, _escortHintText));
       list.Add(new InquiryElement(new PAICustomOrder(null, OrderType.StayInSettlement), _stayInSettlementText, null, true, _stayInSettlementHintText));
       list.Add(new InquiryElement(new PAICustomOrder(null, OrderType.VisitSettlement), _visitText, null, true, _visitHintText));
@@ -116,7 +116,7 @@ namespace PartyAIControls.ViewModels.Dialogs
             newList.Add(new InquiryElement(insert, settlement.Name.ToString(), new BannerImageIdentifier(settlement.OwnerClan?.Banner, false)));
           }
           break;
-        case OrderType.LandPatrolAroundPoint:
+        case OrderType.PatrolAroundPoint:
           settlements = Settlement.All.Where(s => s.IsFortification || s.IsVillage).ToList();
           newList.Add(new(new PAICustomOrder(null, OrderType.PatrolClanLands), new TextObject("{=PAIb2F6Hyfs}Patrol Clan Territory").ToString(), new BannerImageIdentifier(_hero?.ClanBanner, false)));
           foreach (Settlement settlement in settlements.OrderByDescending(s => s.OwnerClan.Equals(_hero?.Clan)).ThenByDescending(s => s.IsTown).ThenByDescending(s => s.IsCastle).ThenBy(s => s.Name.ToString()).ToList())
