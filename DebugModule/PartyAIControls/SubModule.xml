@@ -1,5 +1,5 @@
 ﻿<Module>
-  <Name value="Party AI Controls Rebinds"/>
+  <Name value="Party AI Controls"/>
   <Id value="PartyAIControls"/>
   <Version value="v1.3.11.1"/>
   <SingleplayerModule value="true"/>
