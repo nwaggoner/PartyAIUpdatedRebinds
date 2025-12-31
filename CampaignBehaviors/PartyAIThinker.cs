@@ -46,6 +46,37 @@ namespace PartyAIControls.CampaignBehaviors
       return SafeGet(() => mapPoint.Position, CampaignVec2.Zero);
     }
 
+    private static MobileParty.NavigationType SanitizeNavigationType(MobileParty.NavigationType navigationType)
+    {
+      if (navigationType == MobileParty.NavigationType.None)
+      {
+        return MobileParty.NavigationType.Default;
+      }
+
+      // If the runtime value is outside the defined enum, treat it as Default.
+      // This does not guarantee campaign caches support the value, so callers should still use safe wrappers.
+      if (!Enum.IsDefined(typeof(MobileParty.NavigationType), navigationType))
+      {
+        return MobileParty.NavigationType.Default;
+      }
+
+      return navigationType;
+    }
+
+    private static float GetSafeAverageDistanceBetweenClosestTwoTownsWithNavigationType(MobileParty.NavigationType navigationType)
+    {
+      var safeNavType = SanitizeNavigationType(navigationType);
+
+      try
+      {
+        return Campaign.Current.GetAverageDistanceBetweenClosestTwoTownsWithNavigationType(safeNavType);
+      }
+      catch (KeyNotFoundException)
+      {
+        return Campaign.Current.GetAverageDistanceBetweenClosestTwoTownsWithNavigationType(MobileParty.NavigationType.Default);
+      }
+    }
+
     internal MBReadOnlyList<MobileParty> AssumingDirectControl { get => _assumingDirectControl.ToMBList(); }
 
     internal void ClearAssumingDirectControl() => _assumingDirectControl.Clear();
@@ -877,23 +908,8 @@ namespace PartyAIControls.CampaignBehaviors
         {
             newParams = new List<(AIBehaviorData, float)>();
 
-            // Validate NavigationType before dictionary lookup to prevent KeyNotFoundException
-            var safeNavType = party.DesiredAiNavigationType;
-            if (safeNavType == MobileParty.NavigationType.None || !Enum.IsDefined(typeof(MobileParty.NavigationType), safeNavType))
-            {
-                safeNavType = MobileParty.NavigationType.Default;
-            }
-
-            float range;
-            try
-            {
-                range = Campaign.Current.GetAverageDistanceBetweenClosestTwoTownsWithNavigationType(safeNavType) * 0.9f * distanceFactor;
-            }
-            catch (KeyNotFoundException)
-            {
-                // Fallback for nav types not in cache (e.g., War Sails DLC not installed)
-                range = Campaign.Current.GetAverageDistanceBetweenClosestTwoTownsWithNavigationType(MobileParty.NavigationType.Default) * 0.9f * distanceFactor;
-            }
+            var safeNavType = SanitizeNavigationType(party.DesiredAiNavigationType);
+            float range = GetSafeAverageDistanceBetweenClosestTwoTownsWithNavigationType(safeNavType) * 0.9f * distanceFactor;
 
             if (hero?.Clan?.Settlements?.Count == 0)
             {
@@ -1030,17 +1046,12 @@ namespace PartyAIControls.CampaignBehaviors
         {
             newParams = new List<(AIBehaviorData, float)>();
 
-            // Validate NavigationType before dictionary lookup to prevent KeyNotFoundException
-            var safeNavType = party.DesiredAiNavigationType;
-            if (safeNavType == MobileParty.NavigationType.None || !Enum.IsDefined(typeof(MobileParty.NavigationType), safeNavType))
-            {
-                safeNavType = MobileParty.NavigationType.Default;
-            }
+            var safeNavType = SanitizeNavigationType(party.DesiredAiNavigationType);
 
             Settlement centerSettlement = (Settlement)target;
 
             // Range is a filtering/"too far" heuristic; navigation routing uses vanilla-derived data.
-            float range = Campaign.Current.GetAverageDistanceBetweenClosestTwoTownsWithNavigationType(MobileParty.NavigationType.Default) * 0.9f * distanceFactor;
+            float range = GetSafeAverageDistanceBetweenClosestTwoTownsWithNavigationType(MobileParty.NavigationType.Default) * 0.9f * distanceFactor;
             Vec2 centerPos = TryGetSettlementPos2D(centerSettlement);
             if (centerPos == Vec2.Zero)
             {
