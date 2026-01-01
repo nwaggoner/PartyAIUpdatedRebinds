@@ -67,7 +67,7 @@ namespace PartyAIControls.ViewModels.Components
 
     public void EditModifierKey()
     {
-      InputKey[] keys = new InputKey[] { InputKey.LeftShift, InputKey.RightShift, InputKey.LeftAlt, InputKey.RightAlt, InputKey.LeftControl, InputKey.RightControl, InputKey.Invalid };
+      InputKey[] keys = new InputKey[] { InputKey.LeftShift, InputKey.RightShift, InputKey.LeftAlt, InputKey.RightAlt, InputKey.LeftControl, InputKey.RightControl, InputKey.ControllerLBumper, InputKey.Invalid };
       SelectKey(keys.ToList(), (InputKey result) =>
       {
         ModifierKey = result;
