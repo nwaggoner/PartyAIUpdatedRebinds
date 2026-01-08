@@ -44,6 +44,7 @@
 				<PartyAIOptionToggle Parameter.DataSource="{AllowRaidVillagesToggle}" />
 				<PartyAIOptionToggle Parameter.DataSource="{AllowLordPrisonersToggle}" />
 				<PartyAIOptionToggle Parameter.DataSource="{AllowRecruitmentToggle}" />
+				<PartyAIOptionToggle Parameter.DataSource="{RecruitFromEnemySettlementsToggle}" />
 				
 				<!-- Patrol Radius -->
 				<ListPanel WidthSizePolicy="StretchToParent" HeightSizePolicy="CoverChildren" StackLayout.LayoutMethod="HorizontalLeftToRight" MarginBottom="5" MarginLeft="13">
