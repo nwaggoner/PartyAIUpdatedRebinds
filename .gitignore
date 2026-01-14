@@ -361,3 +361,8 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+
+!DebugModule/PartyAIControls/bin/
+DebugModule/PartyAIControls/bin/Win64_Shipping_Client/*.dll
+!DebugModule/PartyAIControls/bin/Win64_Shipping_Client/PartyAIUpdated.dll

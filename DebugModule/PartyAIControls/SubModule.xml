@@ -1,6 +1,6 @@
 ﻿<Module>
-  <Name value="Party AI Controls"/>
-  <Id value="PartyAIControls"/>
+  <Name value="Party AI Controls (repo)"/>
+  <Id value="PartyAIControls_repo"/>
   <Version value="v1.3.11"/>
   <SingleplayerModule value="true"/>
   <MultiplayerModule value="false"/>
